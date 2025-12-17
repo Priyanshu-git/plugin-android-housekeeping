@@ -1,0 +1,50 @@
+<idea-plugin>
+    <id>com.nexxlabs.housekeeping</id>
+    <name>Housekeeping</name>
+    <version>1.0.0</version>
+    <vendor>Your Team / Your Name</vendor>
+    <vendor email="user@example.com" url="https://example.com">Internal Tools</vendor>
+
+    <description><![CDATA[
+    On-demand unused code and resource analyzer for Android developers.
+    ]]></description>
+
+    <!-- Dependencies on modules available in Android Studio -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+    <depends>com.intellij.modules.xml</depends>
+    <depends>org.jetbrains.kotlin</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Register the Tool Window -->
+        <toolWindow id="Housekeeping"
+                    secondary="true"
+                    icon="AllIcons.Actions.GC"
+                    anchor="right"
+                    factoryClass="com.example.housekeeping.HousekeepingToolWindowFactory"/>
+    </extensions>
+
+    <actions>
+        <!-- The Housekeeping Group -->
+        <group id="Housekeeping.Group" text="Housekeeping" popup="true" icon="AllIcons.Actions.GC">
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+
+            <!-- Sub Options -->
+            <action id="Housekeeping.FindMethods"
+                class="com.example.housekeeping.FindUnusedMethodsAction"
+                text="Find Unused Methods"
+                description="Find unused methods in the selected scope"/>
+
+            <action id="Housekeeping.FindClasses"
+                class="com.example.housekeeping.FindUnusedClassesAction"
+                text="Find Unused Classes"
+                description="Find unused classes in the selected scope"/>
+
+            <action id="Housekeeping.FindResources"
+                class="com.example.housekeeping.FindUnusedResourcesAction"
+                text="Find Unused Resources"
+                description="Find unused resources in the selected scope"/>
+        </group>
+    </actions>
+</idea-plugin>

@@ -1,0 +1,16 @@
+# Default ignored files
+/shelf/
+/.idea/workspace.xml
+
+.gradle
+/build/
+/local.properties
+.idea/
+
+/idea-sandbox/
+/out/
+/classes/
+
+.DS_Store
+Thumbs.db
+
