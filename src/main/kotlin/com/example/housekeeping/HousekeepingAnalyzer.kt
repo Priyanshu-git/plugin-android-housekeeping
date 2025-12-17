@@ -206,8 +206,11 @@ class HousekeepingAnalyzer(private val project: Project) {
     private fun analyzeResourceFile(file: XmlFile, results: MutableList<UnusedItem>) {
         val parentDirName = file.parent?.name ?: ""
 
+        // Strategy A: Value Resources (strings.xml, colors.xml in values/)
         if (parentDirName.startsWith("values")) {
             analyzeValueResources(file, results)
+
+            // Strategy B: File Resources (layout/abc.xml, drawable/xyz.xml)
         } else if (isResourceFolder(parentDirName)) {
             analyzeFileResource(file, results)
         }
@@ -222,11 +225,11 @@ class HousekeepingAnalyzer(private val project: Project) {
                 if (!isStringUsed(name)) {
                     results.add(
                         UnusedItem(
-                            tag,
+                            tag,    // Link to the specific tag, not the file
                             "$type/$name",
                             file.virtualFile.path,
                             ItemType.RESOURCE,
-                            "No usage found."
+                            "No usage of '@$type/$name' or 'R.$type.$name' found."
                         )
                     )
                 }
@@ -245,7 +248,7 @@ class HousekeepingAnalyzer(private val project: Project) {
                     "$folderType/$resourceName",
                     file.virtualFile.path,
                     ItemType.RESOURCE,
-                    "No usage found."
+                    "No usage of '$resourceName' found in Code or XML."
                 )
             )
         }
@@ -296,10 +299,12 @@ class HousekeepingAnalyzer(private val project: Project) {
     }
 
     private fun isStringUsed(target: String): Boolean {
+        // Optimistic Text Search (Heuristic)
+        // Scans project for the string. Effective for R.type.name, @type/name, etc.
         val searchScope = GlobalSearchScope.projectScope(project)
         val helper = PsiSearchHelper.getInstance(project)
         val nothingFound = helper.processElementsWithWord(
-            {_,_ -> false },
+            {_,_ -> false },    // Stop processor immediately upon finding one occurrence
             searchScope,
             target,
             UsageSearchContext.ANY,
