@@ -115,37 +115,12 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
         }
 
         items.forEach { item ->
-            val cb = JCheckBox("${getEmoji(item.type)}: ${getDisplayName(item)}")
+            val cb = JCheckBox("${getEmoji(item.type)}: ${item.name}")
             cb.isSelected = false // Default unchecked for safety
             itemsMap[cb] = item
             listModel.addElement(cb)
         }
         detailsArea.text = "Analysis complete. Found ${items.size} items. Select an item to view details."
-    }
-
-    private fun getDisplayName(item: UnusedItem):String{
-        fun extractClassMethod(path: String?, methodName: String): String {
-            if (methodName.isBlank()) return "❔"
-
-            val className = path
-                ?.substringAfterLast('/', path)
-                ?.substringBeforeLast('.')
-                ?.takeIf { it.isNotBlank() }
-
-            return if (className != null) {
-                "$className.$methodName"
-            } else {
-                methodName
-            }
-        }
-
-
-        return when (item.type) {
-            ItemType.CLASS -> item.name
-            ItemType.METHOD -> extractClassMethod(item.path, item.name)
-            ItemType.RESOURCE -> item.name
-            else -> "❔"
-        }
     }
 
     private fun getEmoji(type: ItemType): String {
