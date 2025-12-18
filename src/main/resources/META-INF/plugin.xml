@@ -11,40 +11,31 @@
 
     <!-- Dependencies on modules available in Android Studio -->
     <depends>com.intellij.modules.platform</depends>
-    <depends>com.intellij.modules.java</depends>
-    <depends>com.intellij.modules.xml</depends>
-    <depends>org.jetbrains.kotlin</depends>
+    <depends>org.jetbrains.android</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <!-- Register the Tool Window -->
-        <toolWindow id="Housekeeping"
-                    secondary="true"
-                    icon="AllIcons.Actions.GC"
-                    anchor="right"
-                    factoryClass="com.example.housekeeping.HousekeepingToolWindowFactory"/>
+        <toolWindow
+            id="Housekeeping"
+            factoryClass="com.example.housekeeping.ui.HousekeepingToolWindowFactory"
+            anchor="right"/>
     </extensions>
 
     <actions>
-        <!-- The Housekeeping Group -->
-        <group id="Housekeeping.Group" text="Housekeeping" popup="true" icon="AllIcons.Actions.GC">
-            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        <group id="Housekeeping.Group" text="Housekeeping" popup="true">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
 
-            <!-- Sub Options -->
-            <action id="Housekeeping.FindMethods"
-                class="com.example.housekeeping.FindUnusedMethodsAction"
-                text="Find Unused Methods"
-                description="Find unused methods in the selected scope"/>
+            <action id="FindUnusedMethods"
+                class="com.example.housekeeping.actions.FindUnusedMethodsAction"
+                text="Find unused methods"/>
 
-            <action id="Housekeeping.FindClasses"
-                class="com.example.housekeeping.FindUnusedClassesAction"
-                text="Find Unused Classes"
-                description="Find unused classes in the selected scope"/>
+            <action id="FindUnusedClasses"
+                class="com.housekeeping.actions.FindUnusedClassesAction"
+                text="Find unused classes"/>
 
-            <action id="Housekeeping.FindResources"
-                class="com.example.housekeeping.FindUnusedResourcesAction"
-                text="Find Unused Resources"
-                description="Find unused resources in the selected scope"/>
+            <action id="FindUnusedResources"
+                class="com.example.housekeeping.actions.FindUnusedResourcesAction"
+                text="Find unused resources"/>
         </group>
     </actions>
 </idea-plugin>

@@ -1,73 +1,28 @@
 plugins {
-    id("java")
-    id("org.jetbrains.kotlin.jvm") version "1.9.23"
-    id("org.jetbrains.intellij") version "1.17.3"
+    kotlin("jvm") version "2.0.0"
+    id("org.jetbrains.intellij") version "1.17.4"
 }
 
-group = "com.example"
-version = "1.0.0"
+group = "com.housekeeping"
+version = "0.1.0"
 
 repositories {
     mavenCentral()
 }
 
-/**
- * 🔐 Force Java 17 everywhere
- */
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
-    }
+intellij {
+    type.set("AI") // Android Studio
+    version.set("2024.1.1.8") // Hedgehog+
+    plugins.set(listOf("android"))
 }
 
 kotlin {
     jvmToolchain(17)
 }
 
-/**
- * IntelliJ Platform configuration
- */
-intellij {
-    version.set("2024.1") // Android Studio Koala / IntelliJ 2024.1 base
-    type.set("IC")
-
-    plugins.set(
-        listOf(
-            "com.intellij.java",
-            "org.jetbrains.kotlin",
-            "com.intellij.properties"
-        )
-    )
-}
-
 tasks {
-
-    withType<JavaCompile>().configureEach {
-        options.release.set(17)
-    }
-
-    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-        kotlinOptions {
-            jvmTarget = "17"
-        }
-    }
-
-    buildSearchableOptions {
-        enabled = false
-    }
-
     patchPluginXml {
         sinceBuild.set("233")
-        untilBuild.set("300")
-    }
-
-    signPlugin {
-        certificateChain.set("")
-        privateKey.set("")
-        password.set("")
-    }
-
-    publishPlugin {
-        token.set("")
+        untilBuild.set("241.*")
     }
 }
