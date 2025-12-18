@@ -54,6 +54,28 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
             }
         })
 
+        // Select All
+        toolbarGroup.add(object : AnAction("Select All", "Select all items", AllIcons.Actions.Selectall) {
+            override fun actionPerformed(e: AnActionEvent) {
+                setAllSelected(true)
+            }
+
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = listModel.size() > 0
+            }
+        })
+
+        // Deselect All
+        toolbarGroup.add(object : AnAction("Deselect All", "Deselect all items", AllIcons.Actions.Unselectall) {
+            override fun actionPerformed(e: AnActionEvent) {
+                setAllSelected(false)
+            }
+
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = listModel.size() > 0
+            }
+        })
+
         val toolbar: ActionToolbar = ActionManager.getInstance().createActionToolbar("HousekeepingToolbar", toolbarGroup, true)
         toolbar.targetComponent = this
         
@@ -96,6 +118,14 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
         })
     }
 
+    private fun setAllSelected(selected: Boolean) {
+        for (i in 0 until listModel.size()) {
+            listModel.get(i).isSelected = selected
+        }
+        list.repaint()
+    }
+
+
     private fun updateDescription(index: Int) {
         val cb = listModel.get(index)
         val item = itemsMap[cb]
@@ -115,12 +145,21 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
         }
 
         items.forEach { item ->
-            val cb = JCheckBox("${getEmoji(item.type)}: ${item.name}")
+            val cb = JCheckBox("${getEmoji(item.type)} ${getDisplayName(item)}")
             cb.isSelected = false // Default unchecked for safety
             itemsMap[cb] = item
             listModel.addElement(cb)
         }
         detailsArea.text = "Analysis complete. Found ${items.size} items. Select an item to view details."
+    }
+
+    private fun getDisplayName(item: UnusedItem): String {
+        return when (item.type) {
+            ItemType.CLASS -> item.name
+            ItemType.METHOD -> item.path.substringAfterLast("/").substringBeforeLast(".") + "." + item.name
+            ItemType.RESOURCE -> item.name
+            ItemType.OTHER -> item.name
+        }
     }
 
     private fun getEmoji(type: ItemType): String {

@@ -28,13 +28,13 @@ kotlin {
  * IntelliJ Platform configuration
  */
 intellij {
-    version.set("2024.1") // Android Studio Koala / IntelliJ 2024.1 base
+    version.set("2024.2.1") // Android Studio Koala / IntelliJ 2024.1 base
     type.set("IC")
 
     plugins.set(
         listOf(
             "com.intellij.java",
-            "org.jetbrains.kotlin",
+//            "org.jetbrains.kotlin",
             "com.intellij.properties"
         )
     )

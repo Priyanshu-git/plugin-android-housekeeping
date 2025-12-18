@@ -8,30 +8,29 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiManager
-import com.intellij.psi.PsiPackage
-import com.intellij.psi.xml.XmlFile
-import org.jetbrains.kotlin.psi.KtClass
-import org.jetbrains.kotlin.psi.KtFile
 
 // --- Base Action ---
 abstract class BaseHousekeepingAction(private val mode: AnalysisMode) : AnAction() {
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
+
+        // 1. Get Context Data
         val psiElement = e.getData(CommonDataKeys.PSI_ELEMENT)
         val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
 
-        // Determine scope
         val scopeElements = mutableListOf<PsiElement>()
 
-        if (psiElement != null) {
+        // 2. Determine Scope (Simplified: If it looks like a file/dir, add it)
+        if (psiElement != null && psiElement !is PsiDirectory) {
+            // It's a code element (Class, Method, or File)
             scopeElements.add(psiElement)
-        } else if (virtualFile != null) {
+        }
+        else if (virtualFile != null) {
+            // Fallback to File/Directory lookup
             val psiFile = PsiManager.getInstance(project).findFile(virtualFile)
             val psiDir = PsiManager.getInstance(project).findDirectory(virtualFile)
             if (psiFile != null) scopeElements.add(psiFile)
@@ -40,11 +39,11 @@ abstract class BaseHousekeepingAction(private val mode: AnalysisMode) : AnAction
 
         if (scopeElements.isEmpty()) return
 
-        // Run Analysis
+        // 3. Run Analysis in Background
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Housekeeping Analysis ($mode)", true) {
             override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+                // The Analyzer handles all UAST/Kotlin logic safely in the background
                 val analyzer = HousekeepingAnalyzer(project)
-                // Pass the specific mode to the analyzer
                 val unusedItems = analyzer.analyze(scopeElements, mode, indicator)
 
                 ApplicationManager.getApplication().invokeLater {
@@ -70,40 +69,42 @@ abstract class BaseHousekeepingAction(private val mode: AnalysisMode) : AnAction
 // --- Specific Action: Find Unused Methods ---
 class FindUnusedMethodsAction : BaseHousekeepingAction(AnalysisMode.METHODS) {
     override fun update(e: AnActionEvent) {
-        val element = e.getData(CommonDataKeys.PSI_ELEMENT)
+        // SAFE CHECK: Only Strings and Standard VirtualFile
         val vFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
-
-        // Enable if it's a Java/Kotlin Class, File, or Directory (Package)
-        val isCodeContext = element is PsiClass || element is KtClass ||
-                element is PsiJavaFile || element is KtFile ||
-                (element is PsiDirectory) // allow searching in package
-
-        e.presentation.isEnabledAndVisible = e.project != null && isCodeContext
+        val isApplicable = vFile != null && (
+                vFile.isDirectory ||
+                        vFile.extension == "java" ||
+                        vFile.extension == "kt"
+                )
+        e.presentation.isEnabledAndVisible = e.project != null && isApplicable
     }
 }
 
 // --- Specific Action: Find Unused Classes ---
 class FindUnusedClassesAction : BaseHousekeepingAction(AnalysisMode.CLASSES) {
     override fun update(e: AnActionEvent) {
-        val element = e.getData(CommonDataKeys.PSI_ELEMENT)
-
-        // Enable primarily on Packages (Directories)
-        val isPackageContext = element is PsiDirectory || element is PsiPackage
-
-        e.presentation.isEnabledAndVisible = e.project != null && isPackageContext
+        // SAFE CHECK
+        val vFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
+        val isApplicable = vFile != null && (
+                vFile.isDirectory ||
+                        vFile.extension == "java" ||
+                        vFile.extension == "kt"
+                )
+        e.presentation.isEnabledAndVisible = e.project != null && isApplicable
     }
 }
 
 // --- Specific Action: Find Unused Resources ---
 class FindUnusedResourcesAction : BaseHousekeepingAction(AnalysisMode.RESOURCES) {
     override fun update(e: AnActionEvent) {
-        val element = e.getData(CommonDataKeys.PSI_ELEMENT)
+        // SAFE CHECK
         val vFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
 
-        // Enable if in 'res' directory or is an XML file
-        val isResourceContext = (element is PsiDirectory && (vFile?.path?.contains("/res") == true)) ||
-                (element is XmlFile)
-
-        e.presentation.isEnabledAndVisible = e.project != null && isResourceContext
+        // Allow XML files OR any Directory (e.g. 'res' folder)
+        val isApplicable = vFile != null && (
+                vFile.extension == "xml" ||
+                        vFile.isDirectory
+                )
+        e.presentation.isEnabledAndVisible = e.project != null && isApplicable
     }
 }

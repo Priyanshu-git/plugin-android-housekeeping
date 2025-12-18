@@ -3,7 +3,6 @@ package com.example.housekeeping
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
-import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.search.GlobalSearchScope
@@ -12,14 +11,12 @@ import com.intellij.psi.search.UsageSearchContext
 import com.intellij.psi.search.searches.OverridingMethodsSearch
 import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.xml.XmlFile
-import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.uast.UAnnotated
 import org.jetbrains.uast.UClass
 import org.jetbrains.uast.UDeclaration
 import org.jetbrains.uast.UFile
 import org.jetbrains.uast.UMethod
 import org.jetbrains.uast.UastVisibility
-import org.jetbrains.uast.getContainingUClass
 import org.jetbrains.uast.toUElement
 import org.jetbrains.uast.toUElementOfType
 
@@ -43,7 +40,7 @@ class HousekeepingAnalyzer(private val project: Project) {
             indicator.text = "Analyzing ${element.containingFile?.name ?: "element"}..."
 
             ReadAction.run<Throwable> {
-                // 1. Try to convert selection to UAST element first
+                // Try UAST conversion first
                 val uElement = element.toUElement()
 
                 when {
@@ -54,9 +51,7 @@ class HousekeepingAnalyzer(private val project: Project) {
 
                     // --- Selection is a Class ---
                     uElement is UClass -> {
-                        if (mode == AnalysisMode.CLASSES) {
-                            analyzeClass(uElement, results)
-                        }
+                        if (mode == AnalysisMode.CLASSES) analyzeClass(uElement, results)
                         if (mode == AnalysisMode.METHODS) {
                             uElement.methods.forEach { analyzeMethod(it, results) }
                         }
@@ -92,7 +87,7 @@ class HousekeepingAnalyzer(private val project: Project) {
         directory.files.forEach { file ->
             if (indicator.isCanceled) return
 
-            // Convert PsiFile -> UFile (Works for Java & Kotlin)
+            // UFile works for both Java and Kotlin
             val uFile = file.toUElementOfType<UFile>()
 
             if (uFile != null) {
@@ -110,26 +105,28 @@ class HousekeepingAnalyzer(private val project: Project) {
     }
 
     private fun analyzeUFile(uFile: UFile, mode: AnalysisMode, results: MutableList<UnusedItem>) {
-        // UFile.classes includes:
-        // 1. Regular classes
-        // 2. Kotlin "Facade" classes (containers for top-level functions)
-
+        // uFile.classes returns all classes in the file
+        // For Kotlin, this includes the "Facade" class (e.g. FileNameKt) which holds top-level functions
         uFile.classes.forEach { uClass ->
+
+            // 1. Analyze the Class itself (skip synthetic facade classes)
             if (mode == AnalysisMode.CLASSES) {
-                // We typically don't want to flag the synthetic "UtilsKt" class as unused,
-                // we only want to flag explicit user classes.
-                // Facade classes usually have the file itself as sourcePsi, or null.
-                val isUserDefinedClass = uClass.sourcePsi is PsiClass || uClass.sourcePsi is KtClass
-                if (isUserDefinedClass) {
+                // Heuristic: User classes usually have a physical PsiClass/KtClass source
+                // Facades often map weirdly, but usually valid user classes have names.
+                val isSynthetic = uClass.name?.endsWith("Kt") == true && uClass.methods.all { it.isStatic }
+                if (!isSynthetic) {
                     analyzeClass(uClass, results)
                 }
             }
 
+            // 2. Analyze Methods inside (including Top-Level functions which appear in Facade classes)
             if (mode == AnalysisMode.METHODS) {
                 uClass.methods.forEach { uMethod ->
-                    // Exclude synthetic methods (like component1() for data classes) if needed,
-                    // but usually standard UAST methods are what we want.
-                    analyzeMethod(uMethod, results)
+                    // Filter out standard synthetic methods (like main, values, valueOf)
+                    val isSynthetic = uMethod.name in setOf("values", "valueOf", "component1", "copy")
+                    if (!isSynthetic) {
+                        analyzeMethod(uMethod, results)
+                    }
                 }
             }
         }
@@ -158,14 +155,10 @@ class HousekeepingAnalyzer(private val project: Project) {
 
         if (query.findFirst() == null) {
             val visibility = getVisibility(method)
-
-            // For Kotlin top-level functions, the parent might be the file
-            val containerName = method.getContainingUClass()?.name ?: "File"
-
             results.add(
                 UnusedItem(
-                    method.sourcePsi ?: psiMethod, // Prefer source PSI for navigation
-                    "$containerName.$name()",
+                    method.sourcePsi ?: psiMethod,
+                    "$name()",
                     method.sourcePsi?.containingFile?.virtualFile?.path ?: "",
                     ItemType.METHOD,
                     "No references found.\nVisibility: $visibility"
@@ -255,40 +248,30 @@ class HousekeepingAnalyzer(private val project: Project) {
     }
 
     // --- Helpers ---
-
     private fun hasKeepAnnotations(element: UAnnotated): Boolean {
         val keepSet = setOf("Keep", "Inject", "Provides", "OnClick", "OnTouch", "GET", "POST", "BindingAdapter")
         return element.uAnnotations.any { uAnn ->
-            // 1. Try fully qualified name (e.g. "androidx.annotation.Keep") -> "Keep"
-            // 2. Fallback to raw text (e.g. "@Keep" or "Keep") if unresolved
             val name = uAnn.qualifiedName?.substringAfterLast(".")
                 ?: uAnn.uastAnchor?.sourcePsi?.text?.trimStart('@')
-
             name != null && keepSet.any { k -> name.contains(k) }
         }
     }
 
     private fun getVisibility(element: UDeclaration): String {
-        return when {
-            element.visibility == UastVisibility.PRIVATE -> "private"
-            element.visibility == UastVisibility.PUBLIC -> "public"
-            element.visibility == UastVisibility.PROTECTED -> "protected"
-            element.visibility == UastVisibility.PACKAGE_LOCAL -> "package-private"
+        return when (element.visibility) {
+            UastVisibility.PRIVATE -> "private"
+            UastVisibility.PUBLIC -> "public"
+            UastVisibility.PROTECTED -> "protected"
             else -> "default"
         }
     }
 
     private fun isAndroidEntryPoint(uClass: UClass): Boolean {
-        // UClass gives us easy access to super types
         val androidBases = setOf(
-            "android.app.Activity",
-            "androidx.fragment.app.Fragment",
-            "android.app.Service",
-            "android.content.BroadcastReceiver",
-            "android.content.ContentProvider",
-            "android.app.Application",
-            "android.view.View",
-            "android.view.ViewGroup"
+            "android.app.Activity", "androidx.fragment.app.Fragment",
+            "android.app.Service", "android.content.BroadcastReceiver",
+            "android.content.ContentProvider", "android.app.Application",
+            "android.view.View", "android.view.ViewModel", "androidx.lifecycle.ViewModel"
         )
 
         // Check hierarchy (Basic check via supers list to avoid heavy resolution if possible,
@@ -303,14 +286,7 @@ class HousekeepingAnalyzer(private val project: Project) {
         // Scans project for the string. Effective for R.type.name, @type/name, etc.
         val searchScope = GlobalSearchScope.projectScope(project)
         val helper = PsiSearchHelper.getInstance(project)
-        val nothingFound = helper.processElementsWithWord(
-            {_,_ -> false },    // Stop processor immediately upon finding one occurrence
-            searchScope,
-            target,
-            UsageSearchContext.ANY,
-            true
-        )
-        return !nothingFound
+        return !helper.processElementsWithWord({_,_ -> false }, searchScope, target, UsageSearchContext.ANY, true)
     }
 
     private fun isResourceFolder(name: String): Boolean {
