@@ -5,48 +5,72 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
-import com.intellij.openapi.project.DumbAware
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiManager
 
-// --- Base Action ---
-abstract class BaseHousekeepingAction(private val mode: AnalysisMode) : AnAction(), DumbAware {
+// --- Base Action (no longer DumbAware — disabled automatically during indexing) ---
+abstract class BaseHousekeepingAction(
+    private val mode: AnalysisMode,
+    private val allowedExtensions: Set<String>
+) : AnAction() {
 
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
+    override fun update(e: AnActionEvent) {
+        val vFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
+        val isApplicable = vFile != null && (
+                vFile.isDirectory || vFile.extension in allowedExtensions
+                )
+        e.presentation.isEnabledAndVisible = e.project != null && isApplicable
+    }
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
 
-        // 1. Get Context Data
-        val psiElement = e.getData(CommonDataKeys.PSI_ELEMENT)
-        val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
-
-        val scopeElements = mutableListOf<PsiElement>()
-
-        // 2. Determine Scope (Simplified: If it looks like a file/dir, add it)
-        if (psiElement != null && psiElement !is PsiDirectory) {
-            // It's a code element (Class, Method, or File)
-            scopeElements.add(psiElement)
+        // Guard against invocation during indexing
+        if (DumbService.isDumb(project)) {
+            DumbService.getInstance(project).showDumbModeNotification(
+                "Housekeeping analysis requires indexing to complete first."
+            )
+            return
         }
-        else if (virtualFile != null) {
-            // Fallback to File/Directory lookup
-            val psiFile = PsiManager.getInstance(project).findFile(virtualFile)
-            val psiDir = PsiManager.getInstance(project).findDirectory(virtualFile)
-            if (psiFile != null) scopeElements.add(psiFile)
-            if (psiDir != null) scopeElements.add(psiDir)
+
+        // Determine scope with PSI safety
+        val scopeElements = ReadAction.compute<List<PsiElement>, Throwable> {
+            val psiElement = e.getData(CommonDataKeys.PSI_ELEMENT)
+            val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
+            val elements = mutableListOf<PsiElement>()
+
+            if (psiElement != null && psiElement !is PsiDirectory) {
+                elements.add(psiElement)
+            } else if (virtualFile != null) {
+                val psiFile = PsiManager.getInstance(project).findFile(virtualFile)
+                val psiDir = PsiManager.getInstance(project).findDirectory(virtualFile)
+                if (psiFile != null) elements.add(psiFile)
+                if (psiDir != null) elements.add(psiDir)
+            }
+            elements
         }
 
         if (scopeElements.isEmpty()) return
 
-        // 3. Run Analysis in Background
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Housekeeping Analysis ($mode)", true) {
+        // Show loading state immediately
+        showLoadingState(project)
+
+        // Run analysis in background with cancellation support
+        ProgressManager.getInstance().run(object : Task.Backgroundable(
+            project,
+            "Housekeeping: Finding Unused ${mode.displayName}",
+            true
+        ) {
             override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
-                // The Analyzer handles all UAST/Kotlin logic safely in the background
                 val analyzer = HousekeepingAnalyzer(project)
                 val unusedItems = analyzer.analyze(scopeElements, mode, indicator)
 
@@ -57,53 +81,42 @@ abstract class BaseHousekeepingAction(private val mode: AnalysisMode) : AnAction
         })
     }
 
+    private fun showLoadingState(project: Project) {
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Housekeeping")
+        toolWindow?.show {
+            val content = toolWindow.contentManager.getContent(0)
+            val component = content?.component
+            if (component is HousekeepingToolWindowPanel) {
+                component.showLoading(mode)
+            }
+        }
+    }
+
     private fun showResults(project: Project, items: List<UnusedItem>, mode: AnalysisMode) {
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Housekeeping")
         toolWindow?.show {
             val content = toolWindow.contentManager.getContent(0)
             val component = content?.component
             if (component is HousekeepingToolWindowPanel) {
-                component.updateResults(items)
-                component.setInfoText("Showing results for: $mode")
+                component.updateResults(items, mode)
             }
         }
     }
 }
 
-// --- Specific Action: Find Unused Methods ---
-class FindUnusedMethodsAction : BaseHousekeepingAction(AnalysisMode.METHODS) {
-    override fun update(e: AnActionEvent) {
-        val vFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
-        val isApplicable = vFile != null && (
-                vFile.isDirectory ||
-                        vFile.extension == "java" ||
-                        vFile.extension == "kt"
-                )
-        e.presentation.isEnabledAndVisible = e.project != null && isApplicable
-    }
-}
+// --- Concrete Actions ---
 
-// --- Specific Action: Find Unused Classes ---
-class FindUnusedClassesAction : BaseHousekeepingAction(AnalysisMode.CLASSES) {
-    override fun update(e: AnActionEvent) {
-        val vFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
-        val isApplicable = vFile != null && (
-                vFile.isDirectory ||
-                        vFile.extension == "java" ||
-                        vFile.extension == "kt"
-                )
-        e.presentation.isEnabledAndVisible = e.project != null && isApplicable
-    }
-}
+class FindUnusedMethodsAction : BaseHousekeepingAction(
+    AnalysisMode.METHODS,
+    setOf("java", "kt")
+)
 
-// --- Specific Action: Find Unused Resources ---
-class FindUnusedResourcesAction : BaseHousekeepingAction(AnalysisMode.RESOURCES) {
-    override fun update(e: AnActionEvent) {
-        val vFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
-        val isApplicable = vFile != null && (
-                vFile.extension == "xml" ||
-                        vFile.isDirectory
-                )
-        e.presentation.isEnabledAndVisible = e.project != null && isApplicable
-    }
-}
+class FindUnusedClassesAction : BaseHousekeepingAction(
+    AnalysisMode.CLASSES,
+    setOf("java", "kt")
+)
+
+class FindUnusedResourcesAction : BaseHousekeepingAction(
+    AnalysisMode.RESOURCES,
+    setOf("xml")
+)

@@ -1,15 +1,19 @@
 package com.example.housekeeping
 
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiElement
+import com.intellij.psi.SmartPointerManager
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiSearchHelper
 import com.intellij.psi.search.UsageSearchContext
 import com.intellij.psi.search.searches.OverridingMethodsSearch
 import com.intellij.psi.search.searches.ReferencesSearch
+import com.intellij.psi.util.InheritanceUtil
 import com.intellij.psi.xml.XmlFile
 import org.jetbrains.uast.UAnnotated
 import org.jetbrains.uast.UClass
@@ -20,11 +24,43 @@ import org.jetbrains.uast.UastVisibility
 import org.jetbrains.uast.toUElement
 import org.jetbrains.uast.toUElementOfType
 
-enum class AnalysisMode {
-    METHODS, CLASSES, RESOURCES
+enum class AnalysisMode(val displayName: String) {
+    METHODS("Methods"),
+    CLASSES("Classes"),
+    RESOURCES("Resources")
 }
 
 class HousekeepingAnalyzer(private val project: Project) {
+
+    companion object {
+        private val LOG = Logger.getInstance(HousekeepingAnalyzer::class.java)
+
+        private val KEEP_ANNOTATIONS = setOf(
+            "Keep", "Inject", "Provides", "OnClick", "OnTouch",
+            "GET", "POST", "BindingAdapter"
+        )
+
+        private val ANDROID_ENTRY_POINTS = setOf(
+            "android.app.Activity", "androidx.fragment.app.Fragment",
+            "android.app.Service", "android.content.BroadcastReceiver",
+            "android.content.ContentProvider", "android.app.Application",
+            "android.view.View", "android.view.ViewModel", "androidx.lifecycle.ViewModel"
+        )
+
+        private val RESOURCE_FOLDER_TYPES = setOf(
+            "layout", "drawable", "anim", "animator", "menu", "raw", "xml", "mipmap"
+        )
+
+        private val TRACKED_RESOURCE_TYPES = setOf(
+            "string", "color", "dimen", "style", "integer", "bool", "id"
+        )
+
+        private val SYNTHETIC_METHOD_NAMES = setOf(
+            "values", "valueOf", "entries",
+            "hashCode", "equals", "toString", "copy",
+            "<init>", "<clinit>"
+        )
+    }
 
     fun analyze(
         scopeElements: List<PsiElement>,
@@ -35,46 +71,49 @@ class HousekeepingAnalyzer(private val project: Project) {
         val total = scopeElements.size
 
         scopeElements.forEachIndexed { index, element ->
-            if (indicator.isCanceled) return results
+            ProgressManager.checkCanceled()
             indicator.fraction = index.toDouble() / total
-            indicator.text = "Analyzing ${element.containingFile?.name ?: "element"}..."
 
-            ReadAction.run<Throwable> {
-                // Try UAST conversion first
-                val uElement = element.toUElement()
+            // Access containingFile inside ReadAction (thread safety)
+            val fileName = ReadAction.compute<String, Throwable> {
+                element.containingFile?.name ?: "element"
+            }
+            indicator.text = "Analyzing $fileName..."
 
-                when {
-                    // --- Selection is a Method ---
-                    uElement is UMethod -> {
-                        if (mode == AnalysisMode.METHODS) analyzeMethod(uElement, results)
-                    }
-
-                    // --- Selection is a Class ---
-                    uElement is UClass -> {
-                        if (mode == AnalysisMode.CLASSES) analyzeClass(uElement, results)
-                        if (mode == AnalysisMode.METHODS) {
-                            uElement.methods.forEach { analyzeMethod(it, results) }
+            when (element) {
+                is PsiDirectory -> {
+                    // Directory analysis uses per-file ReadAction internally
+                    analyzeDirectory(element, mode, results, indicator)
+                }
+                else -> {
+                    ReadAction.run<Throwable> {
+                        val uElement = element.toUElement()
+                        when {
+                            uElement is UMethod && mode == AnalysisMode.METHODS -> {
+                                analyzeMethod(uElement, results)
+                            }
+                            uElement is UClass -> {
+                                if (mode == AnalysisMode.CLASSES) analyzeClass(uElement, results)
+                                if (mode == AnalysisMode.METHODS) {
+                                    uElement.methods.forEach { method ->
+                                        ProgressManager.checkCanceled()
+                                        analyzeMethod(method, results)
+                                    }
+                                }
+                            }
+                            uElement is UFile -> {
+                                analyzeUFile(uElement, mode, results)
+                            }
+                            element is XmlFile && mode == AnalysisMode.RESOURCES -> {
+                                analyzeResourceFile(element, results)
+                            }
                         }
-                    }
-
-                    // --- Selection is a File (Java or Kotlin) ---
-                    // UFile covers both PsiJavaFile and KtFile
-                    uElement is UFile -> {
-                        analyzeUFile(uElement, mode, results)
-                    }
-
-                    // --- Selection is an XML File (Resource) ---
-                    element is XmlFile -> {
-                        if (mode == AnalysisMode.RESOURCES) analyzeResourceFile(element, results)
-                    }
-
-                    // --- Selection is a Directory ---
-                    element is PsiDirectory -> {
-                        analyzeDirectory(element, mode, results, indicator)
                     }
                 }
             }
         }
+
+        LOG.info("Housekeeping analysis complete: found ${results.size} unused ${mode.displayName.lowercase()}")
         return results
     }
 
@@ -84,46 +123,50 @@ class HousekeepingAnalyzer(private val project: Project) {
         results: MutableList<UnusedItem>,
         indicator: ProgressIndicator
     ) {
-        directory.files.forEach { file ->
-            if (indicator.isCanceled) return
+        // Read directory contents in a short ReadAction, then process each file separately
+        val (files, subdirs) = ReadAction.compute<Pair<Array<com.intellij.psi.PsiFile>, Array<PsiDirectory>>, Throwable> {
+            directory.files to directory.subdirectories
+        }
 
-            // UFile works for both Java and Kotlin
-            val uFile = file.toUElementOfType<UFile>()
-
-            if (uFile != null) {
-                // It is a code file
-                analyzeUFile(uFile, mode, results)
-            } else if (file is XmlFile && mode == AnalysisMode.RESOURCES) {
-                // It is a resource file
-                analyzeResourceFile(file, results)
+        files.forEach { file ->
+            ProgressManager.checkCanceled()
+            ReadAction.run<Throwable> {
+                indicator.text = "Analyzing ${file.name}..."
+                val uFile = file.toUElementOfType<UFile>()
+                if (uFile != null) {
+                    analyzeUFile(uFile, mode, results)
+                } else if (file is XmlFile && mode == AnalysisMode.RESOURCES) {
+                    analyzeResourceFile(file, results)
+                }
             }
         }
 
-        directory.subdirectories.forEach { subDir ->
+        subdirs.forEach { subDir ->
+            ProgressManager.checkCanceled()
             analyzeDirectory(subDir, mode, results, indicator)
         }
     }
 
     private fun analyzeUFile(uFile: UFile, mode: AnalysisMode, results: MutableList<UnusedItem>) {
-        // uFile.classes returns all classes in the file
-        // For Kotlin, this includes the "Facade" class (e.g. FileNameKt) which holds top-level functions
         uFile.classes.forEach { uClass ->
+            ProgressManager.checkCanceled()
 
-            // 1. Analyze the Class itself (skip synthetic facade classes)
             if (mode == AnalysisMode.CLASSES) {
-                // Heuristic: User classes usually have a physical PsiClass/KtClass source
-                // Facades often map weirdly, but usually valid user classes have names.
-                val isSynthetic = uClass.name?.endsWith("Kt") == true && uClass.methods.all { it.isStatic }
+                // Detect synthetic facade classes: sourcePsi is null or is the file itself
+                val isSynthetic = uClass.sourcePsi == null || uClass.sourcePsi is com.intellij.psi.PsiFile
                 if (!isSynthetic) {
                     analyzeClass(uClass, results)
                 }
             }
 
-            // 2. Analyze Methods inside (including Top-Level functions which appear in Facade classes)
             if (mode == AnalysisMode.METHODS) {
                 uClass.methods.forEach { uMethod ->
-                    // Filter out standard synthetic methods (like main, values, valueOf)
-                    val isSynthetic = uMethod.name in setOf("values", "valueOf", "component1", "copy")
+                    ProgressManager.checkCanceled()
+                    // Filter compiler-generated methods
+                    val isSynthetic = uMethod.sourcePsi == null
+                            || uMethod.name in SYNTHETIC_METHOD_NAMES
+                            || uMethod.name.startsWith("component")
+                            || uMethod.name.startsWith("copy\$default")
                     if (!isSynthetic) {
                         analyzeMethod(uMethod, results)
                     }
@@ -132,34 +175,41 @@ class HousekeepingAnalyzer(private val project: Project) {
         }
     }
 
-    // --- 7.1 Method Analysis (UAST) ---
+    private fun sakfh(){
+
+    }
+
+    fun afskjb(): Boolean{
+        return false
+    }
+
     private fun analyzeMethod(method: UMethod, results: MutableList<UnusedItem>) {
-        // We need the JavaPsi (LightMethod) to usage searches
         val psiMethod = method.javaPsi
         val name = method.name
 
-        // 1. Check Annotations
+        // Skip main() entry points
+        if (name == "main") return
+
+        // Check annotations
         if (hasKeepAnnotations(method)) return
 
-        // 2. Check Overriding / Overridden
-        // UAST doesn't have a direct "isOverriding" check, we use the PSI bridge.
-        if (psiMethod.findSuperMethods().isNotEmpty()) return // Is Overriding
+        // Check overriding / overridden
+        if (psiMethod.findSuperMethods().isNotEmpty()) return
 
-        // Check if Overridden (expensive search)
-        // We use the psiMethod which represents the declaration in the "Java View"
         if (OverridingMethodsSearch.search(psiMethod).findFirst() != null) return
 
-        // 3. Find Usages
+        // Find usages
         val searchScope = GlobalSearchScope.projectScope(project)
         val query = ReferencesSearch.search(psiMethod, searchScope)
 
         if (query.findFirst() == null) {
             val visibility = getVisibility(method)
+            val sourcePsi = method.sourcePsi ?: psiMethod
             results.add(
                 UnusedItem(
-                    method.sourcePsi ?: psiMethod,
+                    SmartPointerManager.getInstance(project).createSmartPsiElementPointer(sourcePsi),
                     "$name()",
-                    method.sourcePsi?.containingFile?.virtualFile?.path ?: "",
+                    sourcePsi.containingFile?.virtualFile?.path ?: "",
                     ItemType.METHOD,
                     "No references found.\nVisibility: $visibility"
                 )
@@ -167,27 +217,27 @@ class HousekeepingAnalyzer(private val project: Project) {
         }
     }
 
-    // --- 7.2 Class Analysis (UAST) ---
     private fun analyzeClass(uClass: UClass, results: MutableList<UnusedItem>) {
         val name = uClass.name ?: return
         val psiClass = uClass.javaPsi
 
-        // 1. Android Entry Point Check
+        // Android entry point check (full hierarchy via InheritanceUtil)
         if (isAndroidEntryPoint(uClass)) return
 
-        // 2. Annotations
+        // Annotations
         if (hasKeepAnnotations(uClass)) return
 
-        // 3. Find Usages
+        // Find usages
         val searchScope = GlobalSearchScope.projectScope(project)
         val query = ReferencesSearch.search(psiClass, searchScope)
 
         if (query.findFirst() == null) {
+            val sourcePsi = uClass.sourcePsi ?: psiClass
             results.add(
                 UnusedItem(
-                    uClass.sourcePsi ?: psiClass,
+                    SmartPointerManager.getInstance(project).createSmartPsiElementPointer(sourcePsi),
                     name,
-                    uClass.sourcePsi?.containingFile?.virtualFile?.path ?: "",
+                    sourcePsi.containingFile?.virtualFile?.path ?: "",
                     ItemType.CLASS,
                     "No code references found."
                 )
@@ -195,32 +245,30 @@ class HousekeepingAnalyzer(private val project: Project) {
         }
     }
 
-    // --- 7.3 Resource Analysis (PSI/XML - unchanged mostly) ---
     private fun analyzeResourceFile(file: XmlFile, results: MutableList<UnusedItem>) {
         val parentDirName = file.parent?.name ?: ""
 
-        // Strategy A: Value Resources (strings.xml, colors.xml in values/)
         if (parentDirName.startsWith("values")) {
             analyzeValueResources(file, results)
-
-            // Strategy B: File Resources (layout/abc.xml, drawable/xyz.xml)
         } else if (isResourceFolder(parentDirName)) {
             analyzeFileResource(file, results)
         }
     }
 
     private fun analyzeValueResources(file: XmlFile, results: MutableList<UnusedItem>) {
+        val vf = file.virtualFile ?: return
         val rootTag = file.rootTag ?: return
         rootTag.subTags.forEach { tag ->
+            ProgressManager.checkCanceled()
             val name = tag.getAttributeValue("name") ?: return@forEach
             val type = tag.name
             if (isTrackedResourceType(type)) {
                 if (!isStringUsed(name)) {
                     results.add(
                         UnusedItem(
-                            tag,    // Link to the specific tag, not the file
+                            SmartPointerManager.getInstance(project).createSmartPsiElementPointer(tag),
                             "$type/$name",
-                            file.virtualFile.path,
+                            vf.path,
                             ItemType.RESOURCE,
                             "No usage of '@$type/$name' or 'R.$type.$name' found."
                         )
@@ -231,29 +279,30 @@ class HousekeepingAnalyzer(private val project: Project) {
     }
 
     private fun analyzeFileResource(file: XmlFile, results: MutableList<UnusedItem>) {
-        val resourceName = file.virtualFile.nameWithoutExtension
+        val vf = file.virtualFile ?: return
+        val resourceName = vf.nameWithoutExtension
         val folderType = file.parent?.name?.substringBefore("-") ?: "resource"
 
         if (!isStringUsed(resourceName)) {
             results.add(
                 UnusedItem(
-                    file,
+                    SmartPointerManager.getInstance(project).createSmartPsiElementPointer(file),
                     "$folderType/$resourceName",
-                    file.virtualFile.path,
+                    vf.path,
                     ItemType.RESOURCE,
-                    "No usage of '$resourceName' found in Code or XML."
+                    "No usage of '$resourceName' found in code or XML."
                 )
             )
         }
     }
 
     // --- Helpers ---
+
     private fun hasKeepAnnotations(element: UAnnotated): Boolean {
-        val keepSet = setOf("Keep", "Inject", "Provides", "OnClick", "OnTouch", "GET", "POST", "BindingAdapter")
         return element.uAnnotations.any { uAnn ->
             val name = uAnn.qualifiedName?.substringAfterLast(".")
                 ?: uAnn.uastAnchor?.sourcePsi?.text?.trimStart('@')
-            name != null && keepSet.any { k -> name.contains(k) }
+            name != null && KEEP_ANNOTATIONS.any { k -> name.contains(k) }
         }
     }
 
@@ -267,34 +316,24 @@ class HousekeepingAnalyzer(private val project: Project) {
     }
 
     private fun isAndroidEntryPoint(uClass: UClass): Boolean {
-        val androidBases = setOf(
-            "android.app.Activity", "androidx.fragment.app.Fragment",
-            "android.app.Service", "android.content.BroadcastReceiver",
-            "android.content.ContentProvider", "android.app.Application",
-            "android.view.View", "android.view.ViewModel", "androidx.lifecycle.ViewModel"
-        )
-
-        // Check hierarchy (Basic check via supers list to avoid heavy resolution if possible,
-        // but robust check requires resolution).
-        return uClass.supers.any { cls ->
-            cls.qualifiedName?.let { qName -> androidBases.contains(qName) } == true
+        val psiClass = uClass.javaPsi
+        // Use InheritanceUtil to traverse the full class hierarchy
+        return ANDROID_ENTRY_POINTS.any { baseFqn ->
+            InheritanceUtil.isInheritor(psiClass, baseFqn)
         }
     }
 
     private fun isStringUsed(target: String): Boolean {
-        // Optimistic Text Search (Heuristic)
-        // Scans project for the string. Effective for R.type.name, @type/name, etc.
         val searchScope = GlobalSearchScope.projectScope(project)
         val helper = PsiSearchHelper.getInstance(project)
-        return !helper.processElementsWithWord({_,_ -> false }, searchScope, target, UsageSearchContext.ANY, true)
+        return !helper.processElementsWithWord({ _, _ -> false }, searchScope, target, UsageSearchContext.ANY, true)
     }
 
     private fun isResourceFolder(name: String): Boolean {
-        val types = setOf("layout", "drawable", "anim", "animator", "menu", "raw", "xml", "mipmap")
-        return types.any { name.startsWith(it) }
+        return RESOURCE_FOLDER_TYPES.any { name.startsWith(it) }
     }
 
     private fun isTrackedResourceType(tag: String): Boolean {
-        return setOf("string", "color", "dimen", "style", "integer", "bool", "id").contains(tag)
+        return TRACKED_RESOURCE_TYPES.contains(tag)
     }
 }
