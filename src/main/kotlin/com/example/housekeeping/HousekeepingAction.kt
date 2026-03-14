@@ -94,6 +94,8 @@ abstract class BaseHousekeepingAction(
 
     private fun showLoadingState(project: Project) {
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("Housekeeping")
+        // Make the tool window visible the first time analysis is triggered
+        toolWindow?.isAvailable = true
         toolWindow?.show {
             val content = toolWindow.contentManager.getContent(0)
             val component = content?.component

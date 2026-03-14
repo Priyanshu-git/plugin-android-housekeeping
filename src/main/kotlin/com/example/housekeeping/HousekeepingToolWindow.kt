@@ -30,6 +30,9 @@ import javax.swing.JLabel
 import javax.swing.JPanel
 
 class HousekeepingToolWindowFactory : ToolWindowFactory {
+    // Hidden until the first analysis run triggers toolWindow.isAvailable = true
+    override fun shouldBeAvailable(project: Project) = false
+
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val panel = HousekeepingToolWindowPanel(project)
         val contentFactory = ContentFactory.getInstance()
@@ -245,20 +248,37 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
         val element = item.element ?: return
         if (!element.isValid) return
 
-        if (element is com.intellij.psi.PsiFile) {
+        val navigated = if (element is com.intellij.psi.PsiFile) {
             element.navigate(true)
+            true
         } else {
-            (element as? com.intellij.psi.NavigatablePsiElement)?.navigate(true)
+            val nav = element as? com.intellij.psi.NavigatablePsiElement
+            nav?.navigate(true)
+            nav != null
+        }
+
+        if (navigated) {
+            detailsArea.text = detailsArea.text.trimEnd('\n') + "\n\n\u2192 Navigated to source."
         }
     }
 
     private fun deleteSelected() {
+        // DeleteHandler.deletePsiElement() requires the EDT. Assert here so a wrong-thread
+        // call fails loudly rather than silently corrupting state.
+        com.intellij.openapi.application.ApplicationManager.getApplication().assertIsDispatchThread()
+
         val selectedItems = getSelectedItems()
         if (selectedItems.isEmpty()) return
 
-        // Validate elements are still valid
+        // Validate: element still valid AND still lives in the file it was analyzed from.
+        // Guards against deleting elements that have moved or been replaced since analysis ran.
         val validItems = ReadAction.compute<List<UnusedItem>, Throwable> {
-            selectedItems.filter { it.element?.isValid == true }
+            selectedItems.filter { item ->
+                val el = item.element ?: return@filter false
+                if (!el.isValid) return@filter false
+                val currentPath = el.containingFile?.virtualFile?.path
+                currentPath != null && currentPath == item.path
+            }
         }
 
         if (validItems.isEmpty()) {

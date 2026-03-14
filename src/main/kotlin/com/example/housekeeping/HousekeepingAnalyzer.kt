@@ -256,7 +256,7 @@ class HousekeepingAnalyzer(private val project: Project) {
             val name = tag.getAttributeValue("name") ?: return@forEach
             val type = tag.name
             if (isTrackedResourceType(type)) {
-                if (!isStringUsed(name)) {
+                if (!isResourceUsed(name, type)) {
                     results.add(
                         UnusedItem(
                             SmartPointerManager.getInstance(project).createSmartPsiElementPointer(tag),
@@ -276,7 +276,7 @@ class HousekeepingAnalyzer(private val project: Project) {
         val resourceName = vf.nameWithoutExtension
         val folderType = file.parent?.name?.substringBefore("-") ?: "resource"
 
-        if (!isStringUsed(resourceName)) {
+        if (!isResourceUsed(resourceName, folderType)) {
             results.add(
                 UnusedItem(
                     SmartPointerManager.getInstance(project).createSmartPsiElementPointer(file),
@@ -316,10 +316,49 @@ class HousekeepingAnalyzer(private val project: Project) {
         }
     }
 
-    private fun isStringUsed(target: String): Boolean {
+    /**
+     * Returns true if [resourceName] of [resourceType] appears to be referenced somewhere in the
+     * project. Two passes are made, each with a context-validating processor that rejects matches
+     * that are clearly not Android resource references:
+     *
+     *  - **Code pass** (`IN_CODE`): accepts a match only when an ancestor element's text contains
+     *    the qualified pattern `R.<type>.<name>`, ruling out unrelated identifiers that share the
+     *    resource name (e.g. a local variable `val color = …`).
+     *  - **XML pass** (`ANY`): accepts a match only when an ancestor's text contains
+     *    `@<type>/<name>` or `?<type>/<name>`, ruling out attribute values that merely contain the
+     *    word but are not resource references. `IN_XML_ATTRIBUTES` does not exist in the SDK;
+     *    `ANY` is used and the processor's pattern check prevents false positives.
+     */
+    private fun isResourceUsed(resourceName: String, resourceType: String): Boolean {
         val searchScope = GlobalSearchScope.projectScope(project)
         val helper = PsiSearchHelper.getInstance(project)
-        return !helper.processElementsWithWord({ _, _ -> false }, searchScope, target, UsageSearchContext.ANY, true)
+        var found = false
+
+        // --- Code references: R.resourceType.resourceName ---
+        helper.processElementsWithWord({ element, _ ->
+            // Walk up a few PSI levels; the qualified expression R.type.name is typically
+            // the parent or grandparent of the matched identifier leaf.
+            val isRRef = generateSequence(element) { it.parent }
+                .take(4)
+                .any { it.text.contains("R.$resourceType.$resourceName") }
+            if (isRRef) { found = true; false } else true
+        }, searchScope, resourceName, UsageSearchContext.IN_CODE, true)
+
+        if (found) return true
+
+        // --- XML attribute references: @resourceType/resourceName or ?resourceType/resourceName ---
+        helper.processElementsWithWord({ element, _ ->
+            val isXmlRef = generateSequence(element) { it.parent }
+                .take(3)
+                .any { node ->
+                    val t = node.text
+                    t.contains("@$resourceType/$resourceName") ||
+                            t.contains("?$resourceType/$resourceName")
+                }
+            if (isXmlRef) { found = true; false } else true
+        }, searchScope, resourceName, UsageSearchContext.ANY, true)
+
+        return found
     }
 
     private fun isResourceFolder(name: String): Boolean {
