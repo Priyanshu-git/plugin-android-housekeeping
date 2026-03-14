@@ -42,20 +42,31 @@ abstract class BaseHousekeepingAction(
             return
         }
 
-        // Determine scope with PSI safety
+        // Determine scope with PSI safety — supports multi-file selection (VIRTUAL_FILE_ARRAY)
         val scopeElements = ReadAction.compute<List<PsiElement>, Throwable> {
-            val psiElement = e.getData(CommonDataKeys.PSI_ELEMENT)
-            val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
+            val psiManager = PsiManager.getInstance(project)
             val elements = mutableListOf<PsiElement>()
 
-            if (psiElement != null && psiElement !is PsiDirectory) {
-                elements.add(psiElement)
-            } else if (virtualFile != null) {
-                val psiFile = PsiManager.getInstance(project).findFile(virtualFile)
-                val psiDir = PsiManager.getInstance(project).findDirectory(virtualFile)
-                if (psiFile != null) elements.add(psiFile)
-                if (psiDir != null) elements.add(psiDir)
+            // Multi-file selection (Project View) — handles both single and multi-select
+            val virtualFiles = e.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY)
+            if (virtualFiles != null && virtualFiles.isNotEmpty()) {
+                for (vf in virtualFiles) {
+                    if (vf.isDirectory) {
+                        psiManager.findDirectory(vf)?.let { elements.add(it) }
+                    } else {
+                        psiManager.findFile(vf)?.let { elements.add(it) }
+                    }
+                }
             }
+
+            // Fallback: single PSI element from editor context (e.g. right-click on a method)
+            if (elements.isEmpty()) {
+                val psiElement = e.getData(CommonDataKeys.PSI_ELEMENT)
+                if (psiElement != null && psiElement !is PsiDirectory) {
+                    elements.add(psiElement)
+                }
+            }
+
             elements
         }
 

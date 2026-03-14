@@ -67,7 +67,8 @@ class HousekeepingAnalyzer(private val project: Project) {
         mode: AnalysisMode,
         indicator: ProgressIndicator
     ): List<UnusedItem> {
-        val results = mutableListOf<UnusedItem>()
+        // Synchronized defensively; currently single-threaded but safe against future parallelization
+        val results = java.util.Collections.synchronizedList(mutableListOf<UnusedItem>())
         val total = scopeElements.size
 
         scopeElements.forEachIndexed { index, element ->
@@ -173,14 +174,6 @@ class HousekeepingAnalyzer(private val project: Project) {
                 }
             }
         }
-    }
-
-    private fun sakfh(){
-
-    }
-
-    fun afskjb(): Boolean{
-        return false
     }
 
     private fun analyzeMethod(method: UMethod, results: MutableList<UnusedItem>) {
