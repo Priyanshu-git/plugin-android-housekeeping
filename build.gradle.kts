@@ -34,7 +34,6 @@ intellij {
     plugins.set(
         listOf(
             "com.intellij.java",
-//            "org.jetbrains.kotlin",
             "com.intellij.properties"
         )
     )

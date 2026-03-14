@@ -2,7 +2,6 @@
     <id>com.nexxlabs.housekeeping</id>
     <name>Housekeeping</name>
     <version>1.0.0</version>
-    <vendor>Your Team / Your Name</vendor>
     <vendor email="user@example.com" url="https://example.com">Internal Tools</vendor>
 
     <description><![CDATA[
@@ -14,6 +13,10 @@
     <depends>com.intellij.modules.java</depends>
     <depends>com.intellij.modules.xml</depends>
     <depends>org.jetbrains.kotlin</depends>
+
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <supportsKotlinPluginMode supportsK2="true" supportsK1="true"/>
+    </extensions>
 
     <extensions defaultExtensionNs="com.intellij">
         <!-- Register the Tool Window -->
