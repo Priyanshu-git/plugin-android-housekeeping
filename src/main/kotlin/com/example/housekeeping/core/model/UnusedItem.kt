@@ -1,11 +1,7 @@
-package com.example.housekeeping
+package com.example.housekeeping.core.model
 
 import com.intellij.psi.PsiElement
 import com.intellij.psi.SmartPsiElementPointer
-
-enum class ItemType {
-    METHOD, CLASS, RESOURCE, OTHER
-}
 
 data class UnusedItem(
     val elementPointer: SmartPsiElementPointer<PsiElement>,

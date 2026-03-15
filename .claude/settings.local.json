@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"D:\\\\Code\\\\Plugin\\\\Housekeeping\\\\housekeeping-plugin\" && ./gradlew buildPlugin 2>&1 | tail -5)",
+      "Bash(cd \"D:\\\\Code\\\\Plugin\\\\Housekeeping\\\\housekeeping-plugin\" && ./gradlew buildPlugin 2>&1 | tail -10)",
+      "Bash(cd \"D:\\\\Code\\\\Plugin\\\\Housekeeping\\\\housekeeping-plugin\" && ./gradlew buildPlugin 2>&1 | grep -i \"error\\\\|fail\\\\|exception\" | head -20)",
+      "Bash(cd \"D:\\\\Code\\\\Plugin\\\\Housekeeping\\\\housekeeping-plugin\" && ./gradlew buildPlugin 2>&1)",
+      "Bash(cd \"D:\\\\Code\\\\Plugin\\\\Housekeeping\\\\housekeeping-plugin\" && ./gradlew clean buildPlugin 2>&1 | tail -5)",
+      "Bash(cd \"D:\\\\Code\\\\Plugin\\\\Housekeeping\\\\housekeeping-plugin\" && powershell -Command \"[System.IO.Compression.ZipFile]::OpenRead\\('build/distributions/housekeeping-plugin-1.0.0.zip'\\).Entries | ForEach-Object { \\\\$_.FullName + ' \\(' + \\\\$_.Length + ' bytes\\)' }\")",
+      "Bash(cd \"D:\\\\Code\\\\Plugin\\\\Housekeeping\\\\housekeeping-plugin\" && powershell -Command \"Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::OpenRead\\('build/distributions/housekeeping-plugin-1.0.0.zip'\\).Entries | ForEach-Object { \\\\$_.FullName + ' \\(' + \\\\$_.Length + ' bytes\\)' }\")",
+      "Bash(cd:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(unzip:*)",
+      "Bash(for jar:*)",
+      "Bash(./gradlew test:*)",
+      "Bash(./gradlew build:*)"
+    ]
+  }
+}

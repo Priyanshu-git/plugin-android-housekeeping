@@ -1,5 +1,8 @@
 package com.example.housekeeping
 
+import com.example.housekeeping.core.model.AnalysisMode
+import com.example.housekeeping.core.model.ItemType
+import com.example.housekeeping.core.model.UnusedItem
 import com.intellij.psi.SmartPointerManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 

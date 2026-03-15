@@ -1,5 +1,7 @@
-package com.example.housekeeping
+package com.example.housekeeping.core.ui
 
+import com.example.housekeeping.core.model.AnalysisMode
+import com.example.housekeeping.core.model.UnusedItem
 import com.intellij.icons.AllIcons
 import com.intellij.ide.util.DeleteHandler
 import com.intellij.openapi.actionSystem.ActionManager
@@ -8,101 +10,20 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.SimpleToolWindowPanel
-import com.intellij.openapi.wm.ToolWindow
-import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.psi.NavigatablePsiElement
 import com.intellij.psi.PsiElement
-import com.intellij.ui.CheckBoxList
+import com.intellij.psi.PsiFile
 import com.intellij.ui.JBSplitter
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
-import com.intellij.ui.content.ContentFactory
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
-import javax.swing.BoxLayout
-import javax.swing.Icon
-import javax.swing.JCheckBox
-import javax.swing.JComponent
-import javax.swing.JLabel
 import javax.swing.JPanel
-
-class HousekeepingToolWindowFactory : ToolWindowFactory {
-    // Hidden until the first analysis run triggers toolWindow.isAvailable = true
-    override fun shouldBeAvailable(project: Project) = false
-
-    override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        val panel = HousekeepingToolWindowPanel(project)
-        val contentFactory = ContentFactory.getInstance()
-        val content = contentFactory.createContent(panel, "", false)
-        toolWindow.contentManager.addContent(content)
-    }
-}
-
-/**
- * A [CheckBoxList] subclass that renders IntelliJ platform icons next to each item,
- * using [adjustRendering] to insert an icon label between the checkbox and the text.
- */
-private class IconCheckBoxList : CheckBoxList<UnusedItem>() {
-
-    // Pre-allocated renderer components (reused every render call to avoid GC pressure)
-    private val renderPanel = JPanel().apply {
-        layout = BoxLayout(this, BoxLayout.X_AXIS)
-    }
-    private val iconLabel = JLabel().apply {
-        border = JBUI.Borders.empty(0, 4)
-    }
-    private val textLabel = JLabel()
-
-    override fun adjustRendering(
-        rootComponent: JComponent,
-        checkBox: JCheckBox,
-        index: Int,
-        selected: Boolean,
-        hasFocus: Boolean
-    ): JComponent {
-        val item = getItemAt(index)
-
-        // Derive display text from the item (not from checkBox.text, which we clear below)
-        val displayText = if (item != null) getDisplayName(item) else checkBox.text ?: ""
-        checkBox.text = ""
-
-        iconLabel.icon = getItemIcon(item?.type)
-        textLabel.text = displayText
-        textLabel.foreground = checkBox.foreground
-        textLabel.font = checkBox.font
-
-        renderPanel.removeAll()
-        renderPanel.background = rootComponent.background
-        renderPanel.border = rootComponent.border
-        renderPanel.add(checkBox)
-        renderPanel.add(iconLabel)
-        renderPanel.add(textLabel)
-
-        return renderPanel
-    }
-
-    private fun getDisplayName(item: UnusedItem): String {
-        return when (item.type) {
-            ItemType.METHOD -> {
-                val fileName = item.path.substringAfterLast("/").substringBeforeLast(".")
-                "$fileName.${item.name}"
-            }
-            else -> item.name
-        }
-    }
-
-    companion object {
-        fun getItemIcon(type: ItemType?): Icon = when (type) {
-            ItemType.CLASS -> AllIcons.Nodes.Class
-            ItemType.METHOD -> AllIcons.Nodes.Method
-            ItemType.RESOURCE -> AllIcons.Nodes.ResourceBundle
-            else -> AllIcons.Nodes.Tag
-        }
-    }
-}
 
 class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWindowPanel(true, true) {
 
@@ -115,10 +36,8 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
     }
 
     init {
-        // Toolbar actions
         val toolbarGroup = DefaultActionGroup()
 
-        // Delete Selected
         toolbarGroup.add(object : AnAction("Delete Selected", "Safe delete selected items", AllIcons.Actions.GC) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun actionPerformed(e: AnActionEvent) {
@@ -129,7 +48,6 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
             }
         })
 
-        // Select All
         toolbarGroup.add(object : AnAction("Select All", "Select all items", AllIcons.Actions.Selectall) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun actionPerformed(e: AnActionEvent) {
@@ -140,7 +58,6 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
             }
         })
 
-        // Deselect All
         toolbarGroup.add(object : AnAction("Deselect All", "Deselect all items", AllIcons.Actions.Unselectall) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun actionPerformed(e: AnActionEvent) {
@@ -158,15 +75,12 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
         val topPanel = JPanel(BorderLayout())
         topPanel.add(toolbar.component, BorderLayout.WEST)
 
-        // Splitter: list + details
         val splitter = JBSplitter(false, 0.6f)
 
-        // Checkbox click updates details
         checkBoxList.setCheckBoxListListener { index, _ ->
             updateDescription(index)
         }
 
-        // Mouse click / double-click handlers
         checkBoxList.addMouseListener(object : java.awt.event.MouseAdapter() {
             override fun mouseClicked(e: java.awt.event.MouseEvent) {
                 val index = checkBoxList.locationToIndex(e.point)
@@ -183,7 +97,6 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
             add(splitter, BorderLayout.CENTER)
         })
 
-        // Initial empty state
         detailsArea.text = "Right-click a file or directory and select Housekeeping to start analysis."
     }
 
@@ -203,11 +116,11 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
         }
 
         items.forEach { item ->
-            checkBoxList.addItem(item, getDisplayName(item), false)
+            checkBoxList.addItem(item, IconCheckBoxList.getDisplayName(item), false)
         }
 
         detailsArea.text = "Found ${items.size} unused ${mode.displayName.lowercase()}.\n" +
-                "Select an item to view details.\nCheck items and click Delete to remove them."
+            "Select an item to view details.\nCheck items and click Delete to remove them."
     }
 
     // --- Private helpers ---
@@ -231,7 +144,6 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
     }
 
     private fun updateDescription(index: Int) {
-        // Guard against -1 (click outside items) and out-of-bounds
         if (index < 0 || index >= checkBoxList.itemsCount) return
         val item = checkBoxList.getItemAt(index) ?: return
         detailsArea.text = buildString {
@@ -248,11 +160,11 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
         val element = item.element ?: return
         if (!element.isValid) return
 
-        val navigated = if (element is com.intellij.psi.PsiFile) {
+        val navigated = if (element is PsiFile) {
             element.navigate(true)
             true
         } else {
-            val nav = element as? com.intellij.psi.NavigatablePsiElement
+            val nav = element as? NavigatablePsiElement
             nav?.navigate(true)
             nav != null
         }
@@ -263,15 +175,11 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
     }
 
     private fun deleteSelected() {
-        // DeleteHandler.deletePsiElement() requires the EDT. Assert here so a wrong-thread
-        // call fails loudly rather than silently corrupting state.
-        com.intellij.openapi.application.ApplicationManager.getApplication().assertIsDispatchThread()
+        ApplicationManager.getApplication().assertIsDispatchThread()
 
         val selectedItems = getSelectedItems()
         if (selectedItems.isEmpty()) return
 
-        // Validate: element still valid AND still lives in the file it was analyzed from.
-        // Guards against deleting elements that have moved or been replaced since analysis ran.
         val validItems = ReadAction.compute<List<UnusedItem>, Throwable> {
             selectedItems.filter { item ->
                 val el = item.element ?: return@filter false
@@ -290,7 +198,6 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
             return
         }
 
-        // Confirmation dialog with item preview
         val message = buildString {
             append("Are you sure you want to delete ${validItems.size} item(s)?\n\n")
             validItems.take(15).forEach { item ->
@@ -312,16 +219,13 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
         )
         if (result != Messages.YES) return
 
-        // Collect valid PSI elements for deletion
         val elements = ReadAction.compute<Array<PsiElement>, Throwable> {
             validItems.mapNotNull { it.element }.filter { it.isValid }.toTypedArray()
         }
         if (elements.isEmpty()) return
 
-        // IntelliJ Safe Delete (handles conflict resolution + undo)
         DeleteHandler.deletePsiElement(elements, project)
 
-        // Refresh list: keep only unchecked items
         val deletedCount = validItems.size
         val remaining = mutableListOf<UnusedItem>()
         for (i in 0 until checkBoxList.itemsCount) {
@@ -332,20 +236,10 @@ class HousekeepingToolWindowPanel(private val project: Project) : SimpleToolWind
 
         checkBoxList.clear()
         remaining.forEach { item ->
-            checkBoxList.addItem(item, getDisplayName(item), false)
+            checkBoxList.addItem(item, IconCheckBoxList.getDisplayName(item), false)
         }
 
         detailsArea.text = "Deleted $deletedCount item(s). Use Ctrl+Z to undo.\n" +
-                "${remaining.size} item(s) remaining."
-    }
-
-    private fun getDisplayName(item: UnusedItem): String {
-        return when (item.type) {
-            ItemType.METHOD -> {
-                val fileName = item.path.substringAfterLast("/").substringBeforeLast(".")
-                "$fileName.${item.name}"
-            }
-            else -> item.name
-        }
+            "${remaining.size} item(s) remaining."
     }
 }

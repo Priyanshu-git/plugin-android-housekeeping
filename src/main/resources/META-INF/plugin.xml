@@ -5,10 +5,9 @@
     <vendor email="user@example.com" url="https://example.com">Internal Tools</vendor>
 
     <description><![CDATA[
-    On-demand unused code and resource analyzer for Android developers.
+    On-demand unused code and resource analyzer for IntelliJ-based IDEs.
     ]]></description>
 
-    <!-- Dependencies on modules available in Android Studio -->
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
     <depends>com.intellij.modules.xml</depends>
@@ -18,34 +17,67 @@
         <supportsKotlinPluginMode supportsK2="true" supportsK1="true"/>
     </extensions>
 
+    <!-- Custom extension points for language/framework adapters -->
+    <extensionPoints>
+        <extensionPoint name="languageAnalyzer"
+                        interface="com.example.housekeeping.core.spi.LanguageAnalyzer"
+                        dynamic="true"/>
+        <extensionPoint name="entryPointProvider"
+                        interface="com.example.housekeeping.core.spi.EntryPointProvider"
+                        dynamic="true"/>
+        <extensionPoint name="resourceAnalyzer"
+                        interface="com.example.housekeeping.core.spi.ResourceAnalyzer"
+                        dynamic="true"/>
+        <extensionPoint name="annotationFilter"
+                        interface="com.example.housekeeping.core.spi.AnnotationFilter"
+                        dynamic="true"/>
+        <extensionPoint name="syntheticFilter"
+                        interface="com.example.housekeeping.core.spi.SyntheticFilter"
+                        dynamic="true"/>
+    </extensionPoints>
+
     <extensions defaultExtensionNs="com.intellij">
-        <!-- Register the Tool Window -->
         <toolWindow id="Housekeeping"
                     secondary="true"
                     icon="AllIcons.Actions.GC"
                     anchor="right"
-                    factoryClass="com.example.housekeeping.HousekeepingToolWindowFactory"/>
+                    factoryClass="com.example.housekeeping.core.ui.HousekeepingToolWindowFactory"/>
+
+        <projectService serviceImplementation="com.example.housekeeping.core.analysis.AnalysisEngine"/>
+    </extensions>
+
+    <!-- Registered adapters and overlays -->
+    <extensions defaultExtensionNs="com.nexxlabs.housekeeping">
+        <!-- UAST adapter (Java, Kotlin, Groovy, Scala) -->
+        <languageAnalyzer implementation="com.example.housekeeping.adapters.uast.UastLanguageAnalyzer"/>
+        <syntheticFilter implementation="com.example.housekeeping.adapters.uast.UastSyntheticFilter"/>
+
+        <!-- Core annotation filter (framework-agnostic keep annotations) -->
+        <annotationFilter implementation="com.example.housekeeping.core.analysis.CoreAnnotationFilter"/>
+
+        <!-- Android overlay -->
+        <entryPointProvider implementation="com.example.housekeeping.overlays.android.AndroidEntryPointProvider"/>
+        <annotationFilter implementation="com.example.housekeeping.overlays.android.AndroidAnnotationFilter"/>
+        <resourceAnalyzer implementation="com.example.housekeeping.overlays.android.AndroidResourceAnalyzer"/>
     </extensions>
 
     <actions>
-        <!-- The Housekeeping Group -->
         <group id="Housekeeping.Group" text="Housekeeping" popup="true" icon="AllIcons.Actions.GC">
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
 
-            <!-- Sub Options -->
             <action id="Housekeeping.FindMethods"
-                class="com.example.housekeeping.FindUnusedMethodsAction"
+                class="com.example.housekeeping.core.action.FindUnusedMethodsAction"
                 text="Find Unused Methods"
                 description="Find unused methods in the selected scope"/>
 
             <action id="Housekeeping.FindClasses"
-                class="com.example.housekeeping.FindUnusedClassesAction"
+                class="com.example.housekeeping.core.action.FindUnusedClassesAction"
                 text="Find Unused Classes"
                 description="Find unused classes in the selected scope"/>
 
             <action id="Housekeeping.FindResources"
-                class="com.example.housekeeping.FindUnusedResourcesAction"
+                class="com.example.housekeeping.core.action.FindUnusedResourcesAction"
                 text="Find Unused Resources"
                 description="Find unused resources in the selected scope"/>
         </group>
